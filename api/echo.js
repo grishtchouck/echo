@@ -17,8 +17,10 @@ const TTL = 60 * 60 * 12;
 /* ---------- Redis ---------- */
 let redisImpl = null;
 async function upstash(cmds){
-  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  const env = process.env;
+  const find = suffixes => { for (const k of Object.keys(env)) if (suffixes.some(s => k === s || k.endsWith('_' + s)) && env[k]) return env[k]; return null; };
+  const url = find(['KV_REST_API_URL', 'UPSTASH_REDIS_REST_URL']);
+  const token = find(['KV_REST_API_TOKEN', 'UPSTASH_REDIS_REST_TOKEN']);
   if (!url || !token) throw new HttpError(500, 'Хранилище не подключено: добавьте Upstash Redis в проект на Vercel.');
   const r = await fetch(url.replace(/\/$/, '') + '/pipeline', {
     method: 'POST',
