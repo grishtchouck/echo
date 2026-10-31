@@ -10,7 +10,7 @@ const PEOPLE = require('./_echo-people.js');
 
 const MIN_PLAYERS = 3;
 const MAX_PLAYERS = 12;
-const MAX_ROUNDS = 4;
+const MAX_ROUNDS = 6;
 const MAX_WORDS = 5;
 const TTL = 60 * 60 * 12;
 
