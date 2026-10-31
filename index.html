@@ -333,6 +333,39 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
 .step.end.bad em{color:#f08d78}
 .wait{display:flex;flex-direction:column;align-items:center;gap:16px;padding:8px 0}
 .offline{position:fixed;left:50%;top:calc(10px + env(safe-area-inset-top,0px));transform:translateX(-50%);z-index:60;padding:8px 14px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#f08d78;background:#1c0d09;border:1px solid var(--blood-deep)}
+
+/* ---------- ссылка, QR, замена, раскрытие, счёт ---------- */
+.share{display:flex;flex-direction:column;align-items:center;gap:12px}
+.qr{--bc:var(--line-hi);--bg-in:#0d0a08;padding:12px;width:156px;height:156px;display:flex;align-items:center;justify-content:center}
+.qr svg{width:132px;height:132px;display:block;image-rendering:pixelated}
+.share .link{padding:6px 4px}
+.reroll{align-self:center;font-size:11px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);padding:6px 4px;border-bottom:1px dotted var(--line-hi)}
+.reroll:hover{color:var(--amber-hi)}
+.used{text-align:center;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#5d4f42}
+.prog{display:flex;flex-direction:column;align-items:center;gap:8px}
+.prog-bar{width:100%;height:4px;background:var(--line);position:relative}
+.prog-bar i{position:absolute;left:0;top:0;bottom:0;background:var(--amber);transition:width .35s ease}
+.chain .step.new,.chain .chain-h.new{animation:stepIn .7s cubic-bezier(.2,.7,.2,1) both}
+@keyframes stepIn{from{opacity:0;filter:blur(8px);transform:translateY(10px)}to{opacity:1;filter:none;transform:none}}
+.pending{display:flex;gap:6px;padding:10px 0 4px 28px}
+.pending span{width:5px;height:5px;background:var(--line-hi);animation:dots 1.2s steps(2,end) infinite}
+.pending span:nth-child(2){animation-delay:.2s}.pending span:nth-child(3){animation-delay:.4s}
+@keyframes dots{0%{opacity:.25}50%{opacity:1}}
+.mini{display:flex;flex-direction:column;gap:6px}
+.mini div{display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:8px 12px;border:1px solid var(--line);background:rgba(17,13,10,.8)}
+.mini b{font-family:var(--f-title);font-weight:400;font-size:18px;text-transform:uppercase;letter-spacing:.03em}
+.mini span{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);white-space:nowrap}
+.mini .ok span{color:var(--amber)}
+.board{border:1px solid var(--amber-deep);background:rgba(17,13,10,.9);padding:6px 16px}
+.brow{display:grid;grid-template-columns:26px 1fr auto auto;gap:10px;align-items:baseline;padding:10px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+.brow:last-child{border-bottom:0}
+.brow i{font-style:normal;font-family:var(--f-title);font-size:18px;color:var(--dim)}
+.brow b{font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.brow em{font-style:normal;font-size:13px;color:var(--amber)}
+.brow strong{font-family:var(--f-title);font-weight:400;font-size:24px;color:var(--amber-hi);min-width:28px;text-align:right}
+.brow.me b{color:var(--amber-hi)}
+.brow:first-child i{color:var(--amber-hi)}
+@media (prefers-reduced-motion:reduce){.chain .step.new,.chain .chain-h.new,.pending span{animation:none}}
 </style>
 </head>
 <body>
@@ -342,6 +375,7 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
 <div class="glow" aria-hidden="true"></div>
 <canvas id="fx" aria-hidden="true"></canvas>
 <div id="flash" class="flash" aria-hidden="true"></div>
+<script src="/qrcode.js"></script>
 <script>
 (function(){
   var app = document.getElementById('app');
@@ -414,6 +448,21 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
     return h + '</span>';
   }
 
+  /* ---------- ссылка на комнату ---------- */
+  function roomLink(code){ return location.origin + location.pathname.replace(/index\.html$/, '') + '?room=' + code; }
+  var qrCache = {};
+  function qrSVG(text){
+    if (qrCache[text] != null) return qrCache[text];
+    var out = '';
+    try {
+      var q = qrcode(0, 'M'); q.addData(text); q.make();
+      var n = q.getModuleCount(), r = '';
+      for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) if (q.isDark(y, x)) r += 'M' + x + ' ' + y + 'h1v1h-1z';
+      out = '<svg viewBox="-1 -1 ' + (n + 2) + ' ' + (n + 2) + '" shape-rendering="crispEdges" role="img" aria-label="QR-код ссылки на комнату"><path d="' + r + '" fill="#ecdcc0"/></svg>';
+    } catch(e){ out = ''; }
+    return (qrCache[text] = out);
+  }
+
   /* ---------- состояние ---------- */
   var ui = {screen: 'home', name: store.get('echo:name') || '', joinCode: '', err: '', busy: false, draft: '', pick: null, toast: ''};
   var S = null, lastKey = '', lastPhase = '', lastRound = -1;
@@ -430,11 +479,23 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
     if (view.code) store.set('echo:room', view.code);
     if (view.phase !== prevPhase || view.round !== prevRound){
       ui.draft = ''; ui.pick = null; ui.err = '';
-      if (prevPhase && view.phase === 'reveal') setTimeout(function(){ FX.burst(110); flash('rgba(243,180,106,.4)'); }, 200);
+      if (prevPhase && view.phase === 'reveal') setTimeout(function(){ flash('rgba(243,180,106,.3)'); }, 200);
     }
     ui.screen = 'room';
     var key = JSON.stringify(view);
-    if (key !== lastKey){ lastKey = key; render(); }
+    if (key !== lastKey){
+      lastKey = key; render();
+      if (view.phase === 'reveal' && view.reveal){
+        var R = view.reveal;
+        if (R.step > seenStep){
+          var cur = view.cards[view.cards.length - 1];
+          if (!R.done && cur && !cur.partial) setTimeout(function(){ if (cur.ok){ FX.burst(70); flash('rgba(243,180,106,.35)'); } else flash('rgba(0,0,0,.7)'); }, 450);
+          if (R.done && seenStep && seenStep < R.total) setTimeout(function(){ FX.burst(120); }, 200);
+          if (!R.done){ var end = document.getElementById('revend'); if (end && seenStep) setTimeout(function(){ end.scrollIntoView({behavior: REDUCED ? 'auto' : 'smooth', block: 'end'}); }, 60); }
+          seenStep = R.step;
+        }
+      } else seenStep = 0;
+    }
   }
 
   var pollTimer = null, failures = 0;
@@ -449,7 +510,7 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
     }, function(e){
       if (e.status === 404){ leaveRoom('Комната закрылась.'); return; }
       failures++; if (failures > 2) offline.hidden = false;
-    }).then(function(){ pollTimer = setTimeout(poll, 1500); });
+    }).then(function(){ pollTimer = setTimeout(poll, S && S.phase === 'reveal' && S.reveal && !S.reveal.done ? 800 : 1500); });
   }
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) poll(); });
 
@@ -484,7 +545,7 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
   }
   function vJoin(){
     var ok = /^\d{4}$/.test(ui.joinCode) && ui.name.trim();
-    return stage(ART.ball, nav('home') + '<h1 class="title">Войти<br>по коду</h1>',
+    return stage(ART.ball, nav('home') + '<h1 class="title">' + (/^\d{4}$/.test(ui.joinCode) ? 'Комната<br>' + esc(ui.joinCode) : 'Войти<br>по коду') + '</h1>',
       '<label class="digits" id="digits">' + inputDigits(ui.joinCode) +
       '<input id="codein" class="code-in" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="4" aria-label="Код комнаты, 4 цифры" value="' + esc(ui.joinCode) + '"></label>' +
       nameField() + (ui.err ? '<p class="err">' + esc(ui.err) + '</p>' : '') +
@@ -499,6 +560,20 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
     }).join('') + '</div>';
   }
 
+  function shareBlock(){
+    var qr = qrSVG(roomLink(S.code));
+    return '<div class="share">' + (qr ? '<div class="qr nb">' + qr + '</div>' : '') +
+      '<p class="label" style="text-align:center;line-height:1.8">Наведи камеру или<br>отправь ссылку</p>' +
+      btn('Поделиться ссылкой', 'share', {arrow: true}) +
+      '<p class="toast" aria-live="polite">' + esc(ui.toast) + '</p></div>';
+  }
+  function boardHTML(withLast){
+    if (!S.board || !S.board.length || !S.board.some(function(b){ return b.total > 0; })) return '';
+    return '<div style="display:flex;flex-direction:column;gap:10px"><p class="label amber" style="text-align:center">Счёт комнаты</p><div class="board">' +
+      S.board.map(function(b, i){
+        return '<div class="brow' + (b.id === S.me.id ? ' me' : '') + '"><i>' + (i + 1) + '</i><b>' + esc(b.name) + '</b><em>' + (withLast && b.last ? '+' + b.last : '') + '</em><strong>' + b.total + '</strong></div>';
+      }).join('') + '</div></div>';
+  }
   function vLobby(){
     var host = S.me.host, n = S.players.length;
     var list = '<div class="card plist" style="padding:4px 16px">' + S.players.map(function(p){
@@ -510,10 +585,8 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
       : '<p class="hint">Ждём, когда создатель комнаты начнёт игру</p>' + btn('Выйти из комнаты', 'leave');
     return stage(ART.cat,
       nav('exit', '', '<button class="icon-btn nb" data-act="rules" aria-label="Правила">?</button>') + '<h1 class="title">Код комнаты</h1><div class="digits reveal">' + digits(S.code) + '</div>' +
-      '<p class="label" style="text-align:center;line-height:1.8">Поделись кодом<br>с друзьями</p>' +
-      '<button class="icon-btn nb" data-act="copy" aria-label="Скопировать код"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="4.5" y="4.5" width="9" height="10" rx="1"/><path d="M2.5 11V2.5a1 1 0 0 1 1-1H10"/></svg></button>' +
-      '<p class="toast" aria-live="polite">' + esc(ui.toast) + '</p>',
-      '<p class="count">' + n + ' / ' + S.max + '</p>' + list + (ui.err ? '<p class="err">' + esc(ui.err) + '</p>' : '') + low);
+      shareBlock(),
+      '<p class="count">' + n + ' / ' + S.max + '</p>' + list + boardHTML(false) + (ui.err ? '<p class="err">' + esc(ui.err) + '</p>' : '') + low);
   }
 
   function vSpectator(){
@@ -525,8 +598,9 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
     var r = S.round, total = S.game.rounds, p = S.prompt, n = words(ui.draft).length;
     var head = nav('exit', 'Раунд ' + (r + 1) + ' из ' + total, '<button class="icon-btn nb" data-act="rules" aria-label="Правила">?</button>');
     var card = p.kind === 'person'
-      ? '<div class="pcard" style="--img:url(' + CARD_ART[(S.game.n + r) % 4] + ')"><p class="label amber">Твоя легенда</p><p class="who-is">' + esc(p.text) + '</p><p class="small muted">Напиши ассоциацию, не называя имени</p></div>'
-      : '<div class="quote"><p class="label amber">Эхо от предыдущего духа</p><q>' + esc(p.text) + '</q><p class="small muted">Напиши, что тебе это напоминает</p></div>';
+      ? '<div class="pcard" style="--img:url(' + CARD_ART[(S.game.n + r) % 4] + ')"><p class="label amber">Твоя легенда</p><p class="who-is">' + esc(p.text) + '</p><p class="small muted">Напиши ассоциацию, не называя имени</p></div>' +
+        (S.mine ? '' : S.canReroll ? '<button class="reroll" data-act="reroll">Не знаю её — заменить · 1 раз</button>' : '<p class="used">Замена использована</p>')
+      : '<div class="quote"><p class="label amber">Эхо от предыдущего духа</p><q>' + esc(p.text) + '</q><p class="small muted">Напиши свою ассоциацию, не повторяя этих слов</p></div>';
     var body;
     if (S.mine){
       body = '<div class="card" style="text-align:center;gap:6px"><p class="label dim">Твоя ассоциация</p><p style="font-family:var(--f-title);font-size:24px">«' + esc(S.mine) + '»</p></div>' +
@@ -553,19 +627,44 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
     return page(ART.raven, head + q + list + low);
   }
 
+  var seenStep = 0;
+  function chainHTML(c, isNew, newIdx){
+    var cls = function(i){ return isNew && i === newIdx ? ' new' : ''; };
+    var h = '<div class="chain' + (c.ok ? ' ok' : '') + '"><div class="chain-h' + cls(0) + '"><b>' + esc(c.person) + '</b>' +
+      (c.partial ? '<span class="label dim">легенда</span>' : '<span class="label ' + (c.ok ? 'amber' : 'dim') + '">' + (c.ok ? 'узнан' : 'не узнан') + '</span>') + '</div>';
+    h += c.chain.map(function(st, i){ return '<div class="step' + cls(i + 1) + '"><i></i><div><q>' + esc(st.text) + '</q><small>' + esc(st.name) + '</small></div></div>'; }).join('');
+    if (c.partial) h += '<div class="pending" aria-label="Дальше"><span></span><span></span><span></span></div>';
+    else h += '<div class="step end' + (c.ok ? '' : ' bad') + cls(c.chain.length + 1) + '"><i></i><div class="verdict-s"><em>' + esc(c.guess || '—') + '</em><small>версия · ' + esc(c.guesser.name) + '</small></div></div>';
+    return h + '</div>';
+  }
   function vReveal(){
-    var N = S.cards.length;
+    var R = S.reveal, N = S.game.size;
     var head = nav('exit', 'Партия ' + S.game.n, '<button class="icon-btn nb" data-act="rules" aria-label="Правила">?</button>');
+    var host = S.me.host;
+    if (!R.done){
+      var cur = S.cards[S.cards.length - 1], idx = S.cards.length;
+      var within = R.step - (idx - 1) * R.per - 1;
+      var isNew = R.step > seenStep;
+      var prev = S.cards.slice(0, -1).map(function(c){
+        return '<div class="' + (c.ok ? 'ok' : '') + '"><b>' + esc(c.person) + '</b><span>' + (c.ok ? 'узнан' : 'не узнан') + '</span></div>';
+      }).join('');
+      var ctrl = host
+        ? btn(within === R.per - 1 ? (idx < N ? 'Следующая цепочка' : 'К итогам') : 'Дальше', 'next', {kind: 'primary solid', arrow: true, disabled: ui.busy}) +
+          '<button class="link" data-act="all" style="align-self:center">Показать всё сразу</button>'
+        : '<p class="hint">Листает ' + esc((S.players.find(function(p){ return p.host; }) || {name: 'создатель'}).name) + '</p>';
+      return page(ART.ghost, head +
+        '<div class="prog"><p class="label amber">Раскрытие · цепочка ' + idx + ' из ' + N + '</p><div class="prog-bar"><i style="width:' + Math.round(R.step / R.total * 100) + '%"></i></div>' +
+        '<p class="small muted">Угадывает ' + esc(cur.guesser.name) + '</p></div>' +
+        chainHTML(cur, isNew, within) + '<div id="revend"></div>' +
+        (ui.err ? '<p class="err">' + esc(ui.err) + '</p>' : '') + ctrl +
+        (prev ? '<div style="display:flex;flex-direction:column;gap:8px;margin-top:6px"><p class="label dim">Уже раскрыто</p><div class="mini">' + prev + '</div></div>' : ''));
+    }
     var score = '<div class="score"><p class="label amber">Духи узнаны</p><b>' + S.score + ' / ' + N + '</b><p class="small muted">' +
       (S.score === N ? 'Все легенды узнаны. Идеальный сеанс!' : S.score === 0 ? 'Эхо исказилось до неузнаваемости.' : 'Посмотрите, где эхо свернуло не туда.') + '</p></div>';
-    var mineFirst = S.cards.slice().sort(function(a, b){ return (b.guesser.id === S.me.id) - (a.guesser.id === S.me.id); });
-    var cards = mineFirst.map(function(c){
-      return '<div class="chain' + (c.ok ? ' ok' : '') + '"><div class="chain-h"><b>' + esc(c.person) + '</b><span class="label ' + (c.ok ? 'amber' : 'dim') + '">' + (c.ok ? 'узнан' : 'не узнан') + '</span></div>' +
-        c.chain.map(function(s){ return '<div class="step"><i></i><div><q>' + esc(s.text) + '</q><small>' + esc(s.name) + '</small></div></div>'; }).join('') +
-        '<div class="step end' + (c.ok ? '' : ' bad') + '"><i></i><div class="verdict-s"><em>' + esc(c.guess || '—') + '</em><small>версия · ' + esc(c.guesser.name) + '</small></div></div></div>';
-    }).join('');
-    var low = S.me.host ? btn('Ещё партия', 'start', {kind: 'primary solid', arrow: true, disabled: ui.busy || S.players.length < S.min}) : '<p class="hint">Новую партию запускает создатель комнаты</p>';
-    return page(ART.ghost, head + score + '<div class="res">' + cards + '</div>' + (ui.err ? '<p class="err">' + esc(ui.err) + '</p>' : '') + low + btn('Выйти из комнаты', 'exit'));
+    var myPts = S.points && S.points[S.me.id] != null ? '<p class="small" style="text-align:center">Тебе за партию: <b style="color:var(--amber-hi)">+' + S.points[S.me.id] + '</b> · очко за верную догадку и за каждую узнанную цепочку, где ты писал</p>' : '';
+    var cards = S.cards.map(function(c){ return chainHTML(c, false); }).join('');
+    var low = host ? btn('Ещё партия', 'start', {kind: 'primary solid', arrow: true, disabled: ui.busy || S.players.length < S.min}) : '<p class="hint">Новую партию запускает создатель комнаты</p>';
+    return page(ART.ghost, head + score + myPts + boardHTML(true) + low + '<p class="label dim" style="text-align:center;margin-top:8px">Все цепочки</p><div class="res">' + cards + '</div>' + (ui.err ? '<p class="err">' + esc(ui.err) + '</p>' : '') + btn('Выйти из комнаты', 'exit'));
   }
 
   function vRoom(){
@@ -600,7 +699,8 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
       '<div><h4>Начало</h4><ul><li>От 3 до 12 игроков, у каждого свой телефон.</li><li>Каждый получает тайную легенду — известного человека или персонажа.</li></ul></div>' +
       '<div><h4>Эхо по кругу</h4><ul><li>Напиши ассоциацию к своей легенде: до 5 слов, без имени.</li><li>Когда все готовы, ассоциации уходят соседу. Он видит только последнюю и пишет свою ассоциацию к ней.</li><li>Так проходит несколько раундов: на один меньше, чем игроков.</li></ul></div>' +
       '<div><h4>Финал</h4><ul><li>Тебе достаётся последнее эхо цепочки, которую ты ни разу не видел.</li><li>Выбери из списка, с какой легенды она началась. В списке вдвое больше имён, чем игроков.</li><li>Потом все цепочки раскрываются целиком. Ищите, где эхо свернуло не туда.</li></ul></div>' +
-      '<div><h4>Совет</h4><ul><li>Пиши так, чтобы следующий смог продолжить мысль, а не так, чтобы было загадочно.</li></ul></div>' +
+      '<div><h4>Тонкости</h4><ul><li>Не знаешь свою легенду — замени её один раз, пока ничего не написал.</li><li>Нельзя повторять слова из ассоциации, которую тебе передали.</li><li>Раскрытие листает создатель комнаты: звено за звеном у всех на экранах.</li></ul></div>' +
+      '<div><h4>Очки</h4><ul><li>Угадал легенду — очко тебе и каждому, кто писал в этой цепочке.</li><li>Поэтому пиши так, чтобы следующий смог продолжить мысль, а не так, чтобы было загадочно.</li></ul></div>' +
       '</div>' + btn('Понятно', 'close') + '</div>';
     sheet.hidden = false;
   }
@@ -690,6 +790,15 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
         ui.busy = true; ui.err = ''; render();
         enterRoom(api({a: 'join', code: ui.joinCode, name: ui.name}));
         break;
+      case 'share':
+        var link = roomLink(S.code);
+        if (navigator.share){ navigator.share({title: 'Эхо', text: 'Заходи в комнату ' + S.code, url: link}).catch(function(){}); break; }
+        try { navigator.clipboard.writeText(link).then(function(){ ui.toast = 'Ссылка скопирована'; render(); }, function(){ ui.toast = link; render(); }); }
+        catch(e){ ui.toast = link; render(); }
+        break;
+      case 'reroll': act('reroll'); break;
+      case 'next': act('next'); break;
+      case 'all': act('all'); break;
       case 'copy':
         try { navigator.clipboard.writeText(S.code).then(function(){ ui.toast = 'Код скопирован'; render(); }, function(){ ui.toast = 'Код: ' + S.code; render(); }); }
         catch(e){ ui.toast = 'Код: ' + S.code; render(); }
@@ -717,8 +826,14 @@ details.judge .in{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
   });
 
   /* ---------- старт: вернуться в комнату после перезагрузки ---------- */
-  var saved = store.get('echo:room');
+  var saved = store.get('echo:room'), linked = null;
+  try { linked = new URLSearchParams(location.search).get('room'); } catch(e){}
+  if (linked && /^\d{4}$/.test(linked)){
+    try { history.replaceState(null, '', location.pathname); } catch(e){}
+    if (linked !== saved){ saved = null; ui.joinCode = linked; ui.screen = 'join'; }
+  } else linked = null;
   render();
+  if (linked && ui.screen === 'join'){ var nm = document.getElementById(ui.name ? 'gobtn' : 'name'); if (nm) nm.focus(); }
   if (saved){
     api({a: 'state', code: saved}).then(function(v){ if (v.me){ keepAwake(); apply(v); poll(); } else { ui.joinCode = saved; store.del('echo:room'); } }, function(){ store.del('echo:room'); });
   }

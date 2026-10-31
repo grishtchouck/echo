@@ -48,6 +48,9 @@ function shuffle(a){ for (let i = a.length - 1; i > 0; i--){ const j = rnd(i + 1
 const K = code => ({host: `e:${code}:host`, players: `e:${code}:p`, game: `e:${code}:g`});
 const wKey = (code, n) => `e:${code}:w${n}`;
 const qKey = (code, n) => `e:${code}:q${n}`;
+const rKey = (code, n) => `e:${code}:r${n}`;   // замены карточек: pid → новая легенда
+const vKey = (code, n) => `e:${code}:v${n}`;   // шаг раскрытия
+const sKey = code => `e:${code}:sc`;            // очки: номер партии → {pid: очки}
 
 function cleanName(s){
   s = String(s || '').replace(/\s+/g, ' ').trim().slice(0, 20);
@@ -79,12 +82,14 @@ async function load(code, withRound){
   const pl = hash(players);
   const list = Object.keys(pl).map(id => ({id, ...JSON.parse(pl[id])})).sort((a, b) => a.t - b.t);
   const game = gameRaw ? JSON.parse(gameRaw) : null;
-  let W = {}, Q = {};
+  let W = {}, Q = {}, R = {}, V = 0, SC = {};
   if (game && withRound !== false){
-    const [w, q] = await redis([['HGETALL', wKey(code, game.n)], ['HGETALL', qKey(code, game.n)]]);
-    W = hash(w); Q = hash(q);
+    const [w, q, r, v, sc] = await redis([['HGETALL', wKey(code, game.n)], ['HGETALL', qKey(code, game.n)], ['HGETALL', rKey(code, game.n)], ['GET', vKey(code, game.n)], ['HGETALL', sKey(code)]]);
+    W = hash(w); Q = hash(q); R = hash(r); V = +v || 0; SC = hash(sc);
+  } else if (withRound !== false){
+    SC = hash((await redis([['HGETALL', sKey(code)]]))[0]);
   }
-  return {code, host, players: list, game, W, Q};
+  return {code, host, players: list, game, W, Q, R, V, SC};
 }
 
 function phase(room){
@@ -100,6 +105,31 @@ function phase(room){
   return {name: 'reveal'};
 }
 
+/* Легенды с учётом замен: карточку c в первом раунде держит order[c]. */
+function persOf(room){ const g = room.game; return g.pers.map((p, c) => room.R[g.order[c]] || p); }
+function listOf(room){
+  const g = room.game, eff = persOf(room);
+  return g.list.map(name => { const c = g.pers.indexOf(name); return c >= 0 ? eff[c] : name; });
+}
+function pointsOf(room){
+  const g = room.game, N = g.order.length, eff = persOf(room), list = listOf(room), pts = {};
+  g.order.forEach(id => { pts[id] = 0; });
+  eff.forEach((person, c) => {
+    const gid = g.order[(c + g.rounds) % N];
+    if (list[+room.Q[gid]] === person){
+      pts[gid]++;
+      for (let r = 0; r < g.rounds; r++) pts[g.order[(c + r) % N]]++;
+    }
+  });
+  return pts;
+}
+function board(room){
+  const tot = {}, last = {};
+  Object.keys(room.SC).forEach(n => { const o = JSON.parse(room.SC[n]); Object.keys(o).forEach(id => { tot[id] = (tot[id] || 0) + o[id]; }); });
+  if (room.game && room.SC[room.game.n]) Object.assign(last, JSON.parse(room.SC[room.game.n]));
+  return room.players.filter(p => tot[p.id] != null).map(p => ({id: p.id, name: p.name, total: tot[p.id], last: last[p.id] || 0}))
+    .sort((a, b) => b.total - a.total || b.last - a.last);
+}
 const pName = (room, id) => (room.players.find(p => p.id === id) || {name: '—'}).name;
 const cardAt = (g, p, r) => ((p - r) % g.order.length + g.order.length) % g.order.length;
 function textOn(room, c, r){ const g = room.game; return room.W[r + ':' + g.order[(c + r) % g.order.length]]; }
@@ -112,7 +142,8 @@ function view(room, pid){
     me: me ? {id: me.id, name: me.name, host: room.host === pid} : null,
     players: room.players.map(p => ({id: p.id, name: p.name, host: room.host === p.id})),
     min: MIN_PLAYERS, max: MAX_PLAYERS, maxWords: MAX_WORDS,
-    phase: ph.name
+    phase: ph.name,
+    board: board(room)
   };
   const g = room.game;
   if (!g) return base;
@@ -124,29 +155,41 @@ function view(room, pid){
     base.done = ph.done;
     if (p >= 0){
       const c = cardAt(g, p, ph.round);
-      base.prompt = ph.round === 0 ? {kind: 'person', text: g.pers[c]} : {kind: 'assoc', text: textOn(room, c, ph.round - 1)};
+      base.prompt = ph.round === 0 ? {kind: 'person', text: persOf(room)[c]} : {kind: 'assoc', text: textOn(room, c, ph.round - 1)};
       base.mine = room.W[ph.round + ':' + pid] || null;
+      base.canReroll = ph.round === 0 && !base.mine && !room.R[pid];
     }
   } else if (ph.name === 'guess'){
     base.done = ph.done;
-    base.list = g.list;
+    base.list = listOf(room);
     if (p >= 0){
       const c = cardAt(g, p, g.rounds);
       base.prompt = {kind: 'assoc', text: textOn(room, c, g.rounds - 1)};
       base.mine = room.Q[pid] != null ? +room.Q[pid] : null;
     }
   } else if (ph.name === 'reveal'){
+    const eff = persOf(room), list = listOf(room);
+    const per = g.rounds + 2, total = N * per, step = Math.min(Math.max(room.V, 1), total);
     let score = 0;
-    base.cards = g.pers.map((person, c) => {
+    const all = eff.map((person, c) => {
       const chain = [];
       for (let r = 0; r < g.rounds; r++){ const id = g.order[(c + r) % N]; chain.push({id, name: pName(room, id), text: room.W[r + ':' + id]}); }
       const gid = g.order[(c + g.rounds) % N];
-      const guess = g.list[+room.Q[gid]];
+      const guess = list[+room.Q[gid]];
       const ok = guess === person;
       if (ok) score++;
       return {person, chain, guesser: {id: gid, name: pName(room, gid)}, guess, ok};
     });
-    base.score = score;
+    // Отдаём только раскрытую часть, чтобы никто не подсмотрел вперёд.
+    base.reveal = {step, total, per, done: step >= total};
+    base.cards = all.map((card, c) => {
+      const shown = step - c * per;
+      if (shown <= 0) return null;
+      if (shown >= per) return card;
+      const part = {person: card.person, chain: card.chain.slice(0, shown - 1), guesser: card.guesser, partial: true};
+      return part;
+    }).filter(Boolean);
+    if (base.reveal.done){ base.score = score; base.points = pointsOf(room); }
   }
   return base;
 }
@@ -154,7 +197,8 @@ function view(room, pid){
 /* ---------- действия ---------- */
 async function touch(code, n){
   const k = K(code), cmds = [['EXPIRE', k.host, TTL], ['EXPIRE', k.players, TTL], ['EXPIRE', k.game, TTL]];
-  if (n != null) cmds.push(['EXPIRE', wKey(code, n), TTL], ['EXPIRE', qKey(code, n), TTL]);
+  cmds.push(['EXPIRE', sKey(code), TTL]);
+  if (n != null) cmds.push(['EXPIRE', wKey(code, n), TTL], ['EXPIRE', qKey(code, n), TTL], ['EXPIRE', rKey(code, n), TTL], ['EXPIRE', vKey(code, n), TTL]);
   await redis(cmds);
 }
 
@@ -235,8 +279,37 @@ async function handle(body){
     const p = room.game.order.indexOf(pid);
     if (p < 0) fail('Вы не участвуете в этой партии.', 403);
     const text = cleanText(body.text);
-    if (ph.round === 0 && namesPerson(text, room.game.pers[cardAt(room.game, p, 0)])) fail('Нельзя писать само имя.');
+    if (ph.round === 0 && namesPerson(text, persOf(room)[cardAt(room.game, p, 0)])) fail('Нельзя писать само имя.');
+    if (ph.round > 0){
+      const prev = norm(textOn(room, cardAt(room.game, p, ph.round), ph.round - 1) || '').split(' ').filter(w => w.length >= 4);
+      const mine = norm(text).split(' ');
+      const same = prev.find(w => mine.some(m => m.length >= 4 && m.slice(0, Math.max(4, Math.min(m.length, w.length) - 2)) === w.slice(0, Math.max(4, Math.min(m.length, w.length) - 2))));
+      if (same) fail('Нельзя повторять слова из полученной ассоциации («' + same + '»).');
+    }
     await redis([['HSETNX', wKey(code, room.game.n), ph.round + ':' + pid, text], ['EXPIRE', wKey(code, room.game.n), TTL]]);
+    return view(await load(code), pid);
+  }
+
+  if (a === 'reroll'){
+    if (ph.name !== 'write' || ph.round !== 0) fail('Заменить легенду можно только в первом раунде.', 409);
+    if (!room.game.order.includes(pid)) fail('Вы не участвуете в этой партии.', 403);
+    if (room.W['0:' + pid] != null) fail('Ты уже написал ассоциацию.');
+    if (room.R[pid]) fail('Замена уже использована.');
+    const taken = new Set(room.game.pers.concat(room.game.list, Object.values(room.R)));
+    const free = PEOPLE.filter(x => !taken.has(x));
+    if (!free.length) fail('Легенды закончились.');
+    await redis([['HSETNX', rKey(code, room.game.n), pid, free[rnd(free.length)]], ['EXPIRE', rKey(code, room.game.n), TTL]]);
+    return view(await load(code), pid);
+  }
+
+  if (a === 'next' || a === 'all'){
+    if (room.host !== pid) fail('Листает создатель комнаты.', 403);
+    if (ph.name !== 'reveal') return view(room, pid);
+    const g = room.game, total = g.order.length * (g.rounds + 2), cur = Math.max(room.V, 1);
+    const to = a === 'all' ? total : Math.min(total, cur + 1);
+    const cmds = [['SET', vKey(code, g.n), String(to), 'EX', TTL]];
+    if (to >= total) cmds.push(['HSETNX', sKey(code), String(g.n), JSON.stringify(pointsOf(room))], ['EXPIRE', sKey(code), TTL]);
+    await redis(cmds);
     return view(await load(code), pid);
   }
 
@@ -269,4 +342,4 @@ module.exports = async function(req, res){
   }
 };
 module.exports._setRedis = fn => { redisImpl = fn; };
-module.exports._internal = {phase, view, cardAt, namesPerson, words};
+module.exports._internal = {phase, view, cardAt, namesPerson, words, persOf, listOf, pointsOf};
